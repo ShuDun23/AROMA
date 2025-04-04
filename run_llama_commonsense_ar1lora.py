@@ -17,7 +17,7 @@
 # You can also adapt this script on your own text classification task. Pointers for this are left as comments.
 
 import os
-os.environ["TRANSFORMERS_OFFLINE"] = "1"  # 添加在其他import之前
+os.environ["TRANSFORMERS_OFFLINE"] = "1"
 os.environ["WANDB_DISABLED"] = "true"
 # os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
