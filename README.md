@@ -1,1 +1,1 @@
-# AROMA
+# AROMA: Autonomous Rank-one Matrix Adaptation
