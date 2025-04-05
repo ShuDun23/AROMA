@@ -155,7 +155,6 @@ class ReLoRaModel(nn.Module):
 
             if self.keep_original_weights:
                 assert new_module.lora_A.bias is None
-                assert new_module.lora_A.bias is None
                 assert new_module.lora_B.bias is None
 
             if self.lora_only:
