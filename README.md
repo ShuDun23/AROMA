@@ -1,4 +1,6 @@
-# AROMA: Autonomous Rank-one Matrix Adaptation
+# AROMA
+A repo of AROMA: Autonomous Rank-one Matrix Adaptation
+
 <img src="https://github.com/ShuDun23/AROMA/blob/master/fig/workflow.jpg" width="500px">
 
 ## Abstract:
