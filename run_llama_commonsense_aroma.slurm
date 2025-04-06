@@ -19,4 +19,4 @@ echo "SLURM_JOB_ID: $SLURM_JOB_ID"
 echo "SLURM_JOB_NODELIST: $SLURM_JOB_NODELIST"
 echo "==========================="
 
-bash run_llama_commonsense_ar1lora.sh
+bash run_llama_commonsense_aroma.sh

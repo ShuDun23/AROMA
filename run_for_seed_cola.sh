@@ -4,9 +4,9 @@ NPROC_PER_NODE=1
 
 RANDOM_PORT=$(shuf -i 20000-65000 -n 1)
 
-MODEL_NAME_OR_PATH="path to roberta-base"
+MODEL_NAME_OR_PATH="path/to/your/roberta-base"
 TASK_NAME="cola"
-OUTPUT_DIR="./experiments/glue/"
+OUTPUT_DIR="path/to/your/experiments/glue/"
 NUM_TRAIN_EPOCHS=130
 NUM_TRAINING_STEPS=35000
 MAX_SEQ_LENGTH=256
@@ -16,7 +16,7 @@ GRADIENT_ACCUMULATION_STEPS=1
 LORA_R=1
 LORA_ALPHA=4
 WEIGHT_DECAY=0.01
-RELORA=1000
+T_IN=1000
 CYCLE_LENGTH=1000
 SAVE_STEPS=1000
 SCHEDULER_TYPE="cosine_restarts"
@@ -62,7 +62,7 @@ torchrun --nproc_per_node=$NPROC_PER_NODE \
     --lora_r $LORA_R \
     --lora_alpha $LORA_ALPHA \
     --weight_decay $WEIGHT_DECAY \
-    --relora $RELORA \
+    --T_in $T_IN \
     --cycle_length $CYCLE_LENGTH \
     --save_steps $SAVE_STEPS \
     --scheduler_type $SCHEDULER_TYPE \

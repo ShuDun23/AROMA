@@ -4,9 +4,9 @@ NPROC_PER_NODE=1
 
 RANDOM_PORT=$(shuf -i 20000-65000 -n 1)
 
-MODEL_NAME_OR_PATH="./roberta-base"
+MODEL_NAME_OR_PATH="path/to/your/roberta-base"
 TASK_NAME="mrpc"
-OUTPUT_DIR="./experiments/glue/"
+OUTPUT_DIR="path/to/your/experiments/glue/"
 NUM_TRAIN_EPOCHS=52
 NUM_TRAINING_STEPS=3000
 MAX_SEQ_LENGTH=256
@@ -16,7 +16,7 @@ GRADIENT_ACCUMULATION_STEPS=1
 LEARNING_RATE=1e-4
 LORA_R=1
 LORA_ALPHA=4
-RELORA=200
+T_IN=200
 CYCLE_LENGTH=200
 EVAL_STEPS=200
 SAVE_STEPS=200
@@ -60,7 +60,7 @@ torchrun --nproc_per_node=$NPROC_PER_NODE \
     --learning_rate $LEARNING_RATE \
     --lora_r $LORA_R \
     --lora_alpha $LORA_ALPHA \
-    --relora $RELORA \
+    --T_in $T_IN \
     --cycle_length $CYCLE_LENGTH \
     --eval_steps $EVAL_STEPS \
     --save_steps $SAVE_STEPS \

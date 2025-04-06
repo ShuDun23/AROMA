@@ -29,8 +29,9 @@ def scaled_dot_product_attention(query, key, value, attn_mask=None, dropout_p=0.
 if not hasattr(F, 'scaled_dot_product_attention'):
     F.scaled_dot_product_attention = scaled_dot_product_attention
 
+
 @dataclass
-class ReLoRaConfig:
+class AROMAConfig:
     r: int
     lora_alpha: int
     lora_dropout: float
@@ -43,20 +44,20 @@ class ReLoRaConfig:
     convergence_threshold: float = 1e-4
     check_convergence: bool = False
 
-def merge_and_reinit_functional(module):
-    if not isinstance(module, ReLoRaLinear):
+def merge_and_reinit_functional(module): # restart
+    if not isinstance(module, AROMALinear):
         return
 
     _delta = module.lora_B.weight @ module.lora_A.weight
     _delta = _delta * module._post_lora_scale()
-    module.weight.data += _delta # merge
+    module.weight.data += _delta
     nn.init.kaiming_uniform_(module.lora_A.weight, a=math.sqrt(5))
 
     nn.init.zeros_(module.lora_B.weight)
     if module.trainable_scaling:
         nn.init.zeros_(module.scaling)
 
-class ReLoRaModel(nn.Module): 
+class AROMAModel(nn.Module): 
     def __init__(
         self,
         model,
@@ -80,7 +81,7 @@ class ReLoRaModel(nn.Module):
         if r <= 0:
             raise ValueError("r must be positive. If you want r == 0, use the original model.")
         super().__init__()
-        self.wrapped_model: nn.Module = model
+        self.wrapped_model: nn.Module = model 
         self._original_config = model.config
         
         self.r = r
@@ -99,7 +100,7 @@ class ReLoRaModel(nn.Module):
         self.max_steps_before_reset = max_steps_before_reset
         self.lora_change_threshold = lora_change_threshold
         
-        self._config = ReLoRaConfig(
+        self._config = AROMAConfig(
             r=r,
             lora_alpha=lora_alpha,
             lora_dropout=lora_dropout,
@@ -111,7 +112,18 @@ class ReLoRaModel(nn.Module):
             check_convergence=check_convergence,
         )
 
-        self.forward = self.wrapped_model.forward
+        def forward(self, *args, **kwargs):            
+            outputs = self.wrapped_model(*args, **kwargs)
+            
+            if isinstance(outputs, dict):
+                return outputs
+                
+            if isinstance(outputs, tuple):
+                return outputs
+                
+            return outputs
+
+        self.forward = forward.__get__(self)
 
         target_modules_list = target_modules
         if isinstance(target_modules_list, str):
@@ -131,7 +143,7 @@ class ReLoRaModel(nn.Module):
             weight_data = module.weight.data if keep_original_weights else None
             bias_data = module.bias.data if (module.bias is not None and keep_original_weights) else None
 
-            new_module = ReLoRaLinear(
+            new_module = AROMALinear(
                 module.in_features,
                 module.out_features,
                 module_name=module_name,
@@ -154,7 +166,7 @@ class ReLoRaModel(nn.Module):
             )
 
             if self.keep_original_weights:
-                assert new_module.lora_A.bias is None
+                assert new_module.lora_A.bias is None 
                 assert new_module.lora_B.bias is None
 
             if self.lora_only:
@@ -189,44 +201,44 @@ class ReLoRaModel(nn.Module):
 
     def merge_check_and_reinit(self):
         for module in self.modules():
-            if isinstance(module, ReLoRaLinear):
+            if isinstance(module, AROMALinear):
                 module.merge_check_and_reinit()
 
     def get_convergence_status(self):
         status = {}
         for name, module in self.named_modules():
-            if isinstance(module, ReLoRaLinear):
+            if isinstance(module, AROMALinear):
                 status[name] = module.weight_converged
         return status
 
     def check_all_converged(self):
         for module in self.modules():
-            if isinstance(module, ReLoRaLinear) and not module.weight_converged:
+            if isinstance(module, AROMALinear) and not module.weight_converged:
                 return False
         return True
 
     def save_pretrained(self, path):
         self.wrapped_model.save_pretrained(path)
-        with open(os.path.join(path, "relora_config.json"), "w") as f:
+        with open(os.path.join(path, "AROMA_config.json"), "w") as f:
             json.dump(self._config.__dict__, f, indent=4)
 
     @classmethod
     def from_pretrained(cls, path):
-        with open(os.path.join(path, "relora_config.json"), "r") as f:
-            relora_config = json.load(f)
+        with open(os.path.join(path, "AROMA_config.json"), "r") as f:
+            AROMA_config = json.load(f)
 
         config = AutoConfig.from_pretrained(path)
         base_model = AutoModelForCausalLM.from_config(config)
         
-        if "keep_original" in relora_config:
+        if "keep_original" in AROMA_config:
             logger.warning("keep_original is deprecated. Use lora_only instead.")
-            relora_config["lora_only"] = not relora_config.pop("keep_original")
-            relora_config["keep_original_weights"] = not relora_config["lora_only"]
+            AROMA_config["lora_only"] = not AROMA_config.pop("keep_original")
+            AROMA_config["keep_original_weights"] = not AROMA_config["lora_only"]
 
-        if "trainable_scaling" not in relora_config:
-            relora_config["trainable_scaling"] = False
+        if "trainable_scaling" not in AROMA_config:
+            AROMA_config["trainable_scaling"] = False
 
-        model = cls(base_model, **relora_config)
+        model = cls(base_model, **AROMA_config)
         
         with open(os.path.join(path, "pytorch_model.bin"), "rb") as f:
             state_dict = torch.load(f, map_location="cpu")
@@ -241,13 +253,13 @@ class ReLoRaModel(nn.Module):
     def check_lora_changes(self):
         modules_to_reset = []
         for name, module in self.named_modules():
-            if isinstance(module, ReLoRaLinear):
+            if isinstance(module, AROMALinear):
                 if module.check_lora_change():
                     modules_to_reset.append(name)
         return len(modules_to_reset), modules_to_reset
 
 # The code is based on https://github.com/microsoft/LoRA/blob/main/loralib/layers.py
-class ReLoRaLinear(nn.Module):
+class AROMALinear(nn.Module):
     def __init__(
         self,
         in_features: int, # size
@@ -305,7 +317,6 @@ class ReLoRaLinear(nn.Module):
                 )
             elif quantize == "8bit":
                 self.weight = bnb.nn.Int8Params(
-                self.weight = bnb.nn.Int8Params(
                     weight_data,
                     requires_grad=False,
                 )
@@ -355,7 +366,6 @@ class ReLoRaLinear(nn.Module):
 
         return self.scaling
 
-
     @torch.no_grad()
     def merge_check_and_reinit(self):
         if self.lora_only or self.weight_converged:
@@ -370,6 +380,7 @@ class ReLoRaLinear(nn.Module):
         if self.r > 0:
             new_weight += self.lora_B.weight @ self.lora_A.weight * self._post_lora_scale() # merge
     
+        # Convergence Checking
         if self.previous_weight is not None:
             weight_change = torch.norm(new_weight - self.previous_weight) / torch.norm(self.previous_weight)
             self.convergence_history.append(weight_change.item())
@@ -392,8 +403,8 @@ class ReLoRaLinear(nn.Module):
                         del self.previous_weight
                     if hasattr(self, 'convergence_history'):
                         del self.convergence_history
-                    torch.cuda.empty_cache() 
-                    return 
+                    torch.cuda.empty_cache()                    
+                    return
         
         self.weight.data = new_weight # merge
         self.previous_weight = new_weight.clone()

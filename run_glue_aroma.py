@@ -57,7 +57,7 @@ from transformers.utils import check_min_version, send_example_telemetry
 from transformers.utils.versions import require_version
 
 from peft_pretraining.modeling_llama import LlamaForSequenceClassification
-from peft_pretraining.relora1 import ReLoRaModel, ReLoRaLinear
+from peft_pretraining.aroma1 import AROMAModel, AROMALinear
 from peft_pretraining.training_utils import get_scheduler
 
 
@@ -219,9 +219,9 @@ class ModelArguments:
 
 
 @dataclass
-class ReLoRAArguments:
+class AROMAArguments:
     """
-    Arguments for ReLoRA training
+    Arguments for AROMA training
     """
     lora_r: int = field(
         default=8,
@@ -231,7 +231,7 @@ class ReLoRAArguments:
         default=32,
         metadata={"help": "LoRA alpha scaling"}
     )
-    relora: Optional[int] = field(
+    T_in: Optional[int] = field(
         default=None,
         metadata={"help": "Reset LoRA weights every N steps"}
     )
@@ -304,15 +304,15 @@ class ReLoRAArguments:
         metadata={"help": "Inner convergence threshold"}
     )
 
-class ReLoRATrainer(Trainer):
-    def __init__(self, relora_args=None, task_name=None, *args, **kwargs):
+class AROMATrainer(Trainer):
+    def __init__(self, AROMA_args=None, task_name=None, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.relora_args = relora_args
+        self.AROMA_args = AROMA_args
         self.task_name = task_name
         self.update_step = 0
 
         self.all_converged = False
-        self.convergence_patience = self.relora_args.convergence_patience
+        self.convergence_patience = self.AROMA_args.convergence_patience
         self.convergence_counter = 0
 
         if self.is_world_process_zero():
@@ -352,18 +352,18 @@ class ReLoRATrainer(Trainer):
         if optimizer is None:
             optimizer = self.optimizer
 
-        if self.relora_args.scheduler_type == "cosine_restarts":
-            if self.relora_args.restart_warmup_steps is None:
-                self.relora_args.restart_warmup_steps = self.relora_args.first_warmup_steps
+        if self.AROMA_args.scheduler_type == "cosine_restarts":
+            if self.AROMA_args.restart_warmup_steps is None:
+                self.AROMA_args.restart_warmup_steps = self.AROMA_args.first_warmup_steps
 
         self.lr_scheduler = get_scheduler(
             optimizer,
-            scheduler_type=self.relora_args.scheduler_type,
-            num_training_steps=self.relora_args.num_training_steps,
-            warmup_steps=self.relora_args.first_warmup_steps,
-            min_lr_ratio=self.relora_args.min_lr_ratio,
-            cycle_length=self.relora_args.cycle_length,
-            restart_warmup_steps=self.relora_args.restart_warmup_steps,
+            scheduler_type=self.AROMA_args.scheduler_type,
+            num_training_steps=self.AROMA_args.num_training_steps,
+            warmup_steps=self.AROMA_args.first_warmup_steps,
+            min_lr_ratio=self.AROMA_args.min_lr_ratio,
+            cycle_length=self.AROMA_args.cycle_length,
+            restart_warmup_steps=self.AROMA_args.restart_warmup_steps,
             adjust_step=0,
         )
         return self.lr_scheduler
@@ -377,11 +377,11 @@ class ReLoRATrainer(Trainer):
             if self.is_world_process_zero():
                 if isinstance(model, torch.nn.parallel.DistributedDataParallel):
                     num_reset, modules = model.module.check_lora_changes()
-                    total_lora_layers = sum(1 for _ in model.module.modules() if isinstance(_, ReLoRaLinear))
+                    total_lora_layers = sum(1 for _ in model.module.modules() if isinstance(_, AROMALinear))
                     # logger.info(f"Total LoRA layers: {total_lora_layers}")
                 else:
                     num_reset, modules = model.check_lora_changes()
-                    total_lora_layers = sum(1 for _ in model.modules() if isinstance(_, ReLoRaLinear))
+                    total_lora_layers = sum(1 for _ in model.modules() if isinstance(_, AROMALinear))
                     # logger.info(f"Total LoRA layers: {total_lora_layers}")
 
                 need_reset = (num_reset == total_lora_layers)
@@ -483,9 +483,9 @@ class ReLoRATrainer(Trainer):
             self.optimizer,
             reset_params=[p for n, p in self.model.named_parameters() if "lora_" in n],
             optimizer_state_keys=["exp_avg", "exp_avg_sq"], # Adam优化器的state_keys
-            reset_optimizer_on_relora=self.relora_args.reset_optimizer_on_relora,
-            optimizer_random_pruning=self.relora_args.optimizer_random_pruning,
-            optimizer_magnitude_pruning=self.relora_args.optimizer_magnitude_pruning,
+            reset_optimizer_on_relora=self.AROMA_args.reset_optimizer_on_relora,
+            optimizer_random_pruning=self.AROMA_args.optimizer_random_pruning,
+            optimizer_magnitude_pruning=self.AROMA_args.optimizer_magnitude_pruning,
         )
 
     def save_model(self, output_dir: Optional[str] = None, _internal_call: bool = False):
@@ -573,21 +573,6 @@ class DetailedLoggingCallback(TrainerCallback):
         logger.info(f"Current epoch: {state.epoch}")
         logger.info(f"Evaluation metrics: {metrics}")
         return control
-    
-def send_email(subject, content):
-    if not hasattr(send_email, 'is_main_process'):
-        send_email.is_main_process = os.environ.get('LOCAL_RANK', '0') == '0'
-    
-    if not send_email.is_main_process:
-        return
-
-    receiver = "hnsheng2-c@my.cityu.edu.hk"
-    try:
-        cmd = f'echo "{content}" | mail -s "{subject}" {receiver}'
-        os.system(cmd)
-        logger.info(f"Email sent: {subject}")
-    except Exception as e:
-        logger.error(f"Email sending failed: {str(e)}")
 
 def main():
     start_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -596,26 +581,13 @@ def main():
     # or by passing the --help flag to this script.
     # We now keep distinct sets of args, for a cleaner separation of concerns.
 
-    parser = HfArgumentParser((ModelArguments, DataTrainingArguments, TrainingArguments, ReLoRAArguments)) 
+    parser = HfArgumentParser((ModelArguments, DataTrainingArguments, TrainingArguments, AROMAArguments)) 
     if len(sys.argv) == 2 and sys.argv[1].endswith(".json"):
         # If we pass only one argument to the script and it's the path to a json file,
         # let's parse it to get our arguments.
-        model_args, data_args, training_args, relora_args = parser.parse_json_file(json_file=os.path.abspath(sys.argv[1]))
+        model_args, data_args, training_args, AROMA_args = parser.parse_json_file(json_file=os.path.abspath(sys.argv[1]))
     else:
-        model_args, data_args, training_args, relora_args = parser.parse_args_into_dataclasses()
-
-    send_email(
-        "Training started",
-        f"Training task has started running\n"
-        f"Start time: {start_time}\n"
-        f"Training parameters:\n"
-        f"- task_name: {data_args.task_name}\n"
-        f"- convergence_threshold: {relora_args.convergence_threshold}\n"
-        f"- learning rate: {training_args.learning_rate}\n"
-        f"- batch size: {training_args.per_device_train_batch_size}\n"
-        f"- ReLoRA step: {relora_args.relora}\n"
-        f"- LoRA rank: {relora_args.lora_r}"
-    )
+        model_args, data_args, training_args, AROMA_args = parser.parse_args_into_dataclasses()
 
     # Sending telemetry. Tracking the example usage helps us better allocate resources to maintain them. The
     # information sent is the one passed as arguments along with your Python/PyTorch versions.
@@ -698,7 +670,7 @@ def main():
     # In distributed training, the load_dataset function guarantee that only one local process can concurrently
     # download the dataset.
 
-    local_glue_path = "/home/hnsheng2/.cache/huggingface/datasets/glue/"
+    local_glue_path = "path/to/your/local/glue/.cache/huggingface/datasets/glue/"
     task_path = os.path.join(local_glue_path, data_args.task_name)
     
     if not os.path.exists(task_path):
@@ -850,28 +822,28 @@ def main():
         else:
             raise RuntimeError("No CUDA device available")
 
-    if relora_args.relora is not None:
+    if AROMA_args.T_in is not None:
         need_linear_weight = True
-        logger.info(f"Wrapping model with ReLoRA ({need_linear_weight=})")
+        logger.info(f"Wrapping model with AROMA ({need_linear_weight=})")
         
-        model = ReLoRaModel(
+        model = AROMAModel(
             model,
-            r=relora_args.lora_r,
-            lora_alpha=relora_args.lora_alpha,
+            r=AROMA_args.lora_r,
+            lora_alpha=AROMA_args.lora_alpha,
             # target_modules=["q", "k", "v", "o", "wi", "wo"],
             target_modules=["query", "key", "value", "dense"],
             # target_modules=["attn", "attention", "mlp"],
             # target_modules=["q_proj", "v_proj", "k_proj", "o_proj", "gate_proj", "down_proj", "up_proj"],
             lora_dropout=0.1,
-            trainable_scaling=relora_args.train_scaling,
+            trainable_scaling=AROMA_args.train_scaling,
             keep_original_weights=True,
             lora_only=not need_linear_weight,
-            convergence_threshold=relora_args.convergence_threshold,
-            check_convergence=relora_args.check_convergence,
-            convergence_window=relora_args.convergence_window,
-            lora_check_frequency=relora_args.lora_check_frequency,
-            max_steps_before_reset=relora_args.max_steps_before_reset,
-            lora_change_threshold=relora_args.lora_change_threshold,
+            convergence_threshold=AROMA_args.convergence_threshold,
+            check_convergence=AROMA_args.check_convergence,
+            convergence_window=AROMA_args.convergence_window,
+            lora_check_frequency=AROMA_args.lora_check_frequency,
+            max_steps_before_reset=AROMA_args.max_steps_before_reset,
+            lora_change_threshold=AROMA_args.lora_change_threshold,
         )
     
 
@@ -1071,8 +1043,8 @@ def main():
             logger.info(f"Prediction set label distribution: {dict(zip(unique, counts))}")
     
     # Initialize our Trainer
-    trainer = ReLoRATrainer(
-        relora_args=relora_args,
+    trainer = AROMATrainer(
+        AROMA_args=AROMA_args,
         task_name=data_args.task_name,
         model=model,
         args=training_args,
@@ -1244,19 +1216,10 @@ def main():
     else:
         trainer.create_model_card(**kwargs)
 
-    logger.info("*** ReLoRA Training Finished! ***")
+    logger.info("*** AROMA Training Finished! ***")
 
     end_time = datetime.now()
     duration = end_time - datetime.strptime(start_time, "%Y-%m-%d %H:%M:%S")
-
-    send_email(
-        "Training Finished",
-        f"Training task completed successfully!\n"
-        f"Start time: {start_time}\n"
-        f"End time: {end_time.strftime('%Y-%m-%d %H:%M:%S')}\n"
-        f"Run duration: {duration}\n"
-        f"Output directory: {training_args.output_dir}\n"
-    )
 
 
 def _mp_fn(index):

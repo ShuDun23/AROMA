@@ -31,8 +31,7 @@ import time
 from datetime import datetime, timedelta
 import json
 from pathlib import Path
-import psutil
-import GPUtil
+# import GPUtil
 
 
 import datasets
@@ -65,7 +64,7 @@ from transformers.utils.versions import require_version
 # from transformers.training_args import ParallelMode
 
 from peft_pretraining.modeling_llama import LlamaForSequenceClassification
-from peft_pretraining.relora import ReLoRaModel, ReLoRaLinear
+from peft_pretraining.aroma import AROMAModel, AROMALinear
 from peft_pretraining.training_utils import get_scheduler
 # from peft_pretraining.base_dataset import DataCollatorForSupervisedDataset
 from peft_pretraining.commonsense_dataset import build_commonsense_dataset
@@ -232,9 +231,9 @@ class ModelArguments:
     )
 
 @dataclass
-class ReLoRAArguments:
+class AROMAArguments:
     """
-    Arguments for ReLoRA training
+    Arguments for AROMA training
     """
     lora_r: int = field(
         default=8,
@@ -244,7 +243,7 @@ class ReLoRAArguments:
         default=32,
         metadata={"help": "LoRA alpha scaling"}
     )
-    relora: Optional[int] = field(
+    T_in: Optional[int] = field(
         default=None,
         metadata={"help": "Reset LoRA weights every N steps"}
     )
@@ -318,14 +317,14 @@ class ReLoRAArguments:
         metadata={"help": "Inner convergence threshold"}
     )
 
-class ReLoRATrainer(Trainer):
-    def __init__(self, relora_args=None, *args, **kwargs):
+class AROMATrainer(Trainer):
+    def __init__(self, AROMA_args=None, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.relora_args = relora_args
+        self.AROMA_args = AROMA_args
         self.update_step = 0
 
         self.all_converged = False
-        self.convergence_patience = self.relora_args.convergence_patience
+        self.convergence_patience = self.AROMA_args.convergence_patience
         self.convergence_counter = 0
 
         if self.is_world_process_zero():
@@ -365,71 +364,62 @@ class ReLoRATrainer(Trainer):
         if optimizer is None:
             optimizer = self.optimizer
 
-        if self.relora_args.scheduler_type == "cosine_restarts":
-            if self.relora_args.restart_warmup_steps is None:
-                self.relora_args.restart_warmup_steps = self.relora_args.first_warmup_steps
+        if self.AROMA_args.scheduler_type == "cosine_restarts":
+            if self.AROMA_args.restart_warmup_steps is None:
+                self.AROMA_args.restart_warmup_steps = self.AROMA_args.first_warmup_steps
 
         self.lr_scheduler = get_scheduler(
             optimizer,
-            scheduler_type=self.relora_args.scheduler_type,
-            num_training_steps=self.relora_args.num_training_steps,
-            warmup_steps=self.relora_args.first_warmup_steps,
-            min_lr_ratio=self.relora_args.min_lr_ratio,
-            cycle_length=self.relora_args.cycle_length,
-            restart_warmup_steps=self.relora_args.restart_warmup_steps,
+            scheduler_type=self.AROMA_args.scheduler_type,
+            num_training_steps=self.AROMA_args.num_training_steps,
+            warmup_steps=self.AROMA_args.first_warmup_steps,
+            min_lr_ratio=self.AROMA_args.min_lr_ratio,
+            cycle_length=self.AROMA_args.cycle_length,
+            restart_warmup_steps=self.AROMA_args.restart_warmup_steps,
             adjust_step=0,
         )
         return self.lr_scheduler
 
     # def training_step(self, model, inputs, num_items_in_batch=None):
-    #     """重写training_step方法"""
     #     self.update_step += 1
         
-    #     # 正常训练步骤
     #     loss = super().training_step(model, inputs, num_items_in_batch)
         
-    #     # 检查LoRA权重变化
     #     if (self.update_step % self.args.gradient_accumulation_steps == 0):
-    #         # 只在主进程执行检查
     #         if self.is_world_process_zero():
     #             if isinstance(model, torch.nn.parallel.DistributedDataParallel):
     #                 num_reset, modules = model.module.check_lora_changes()
-    #                 total_lora_layers = sum(1 for _ in model.module.modules() if isinstance(_, ReLoRaLinear))
+    #                 total_lora_layers = sum(1 for _ in model.module.modules() if isinstance(_, AROMALinear))
     #                 # logger.info(f"Total LoRA layers: {total_lora_layers}")
     #             else:
     #                 num_reset, modules = model.check_lora_changes()
-    #                 total_lora_layers = sum(1 for _ in model.modules() if isinstance(_, ReLoRaLinear))
+    #                 total_lora_layers = sum(1 for _ in model.modules() if isinstance(_, AROMALinear))
     #                 # logger.info(f"Total LoRA layers: {total_lora_layers}")
 
-    #             # 只有当所有LoRA层都需要重置时才设置need_reset为True
     #             need_reset = (num_reset == total_lora_layers)
     #             if need_reset:
     #                 logger.info(f"All {num_reset} LoRA layers need reset")
 
-    #             # 将结果转换为tensor以便广播
     #             reset_tensor = torch.tensor(1 if need_reset else 0, device=model.device)
     #         else:
     #             reset_tensor = torch.tensor(0, device=model.device)
                 
-    #         # 同步结果
     #         if torch.distributed.is_initialized():
     #             torch.distributed.broadcast(reset_tensor, src=0)
     #             torch.distributed.barrier()
                 
     #         need_reset = reset_tensor.item() == 1
             
-    #         # 如果需要重置，执行merge_check_and_reinit
     #         if need_reset:
     #             if self.is_world_process_zero():
     #                 logger.info(f"Performing LoRA reset at step {self.state.global_step}")
-    #                 if modules:  # 如果有具体的模块列表
+    #                 if modules:
     #                     logger.info(f"Modules to reset: {', '.join(modules)}")
     #                 self._perform_lora_reset(model)
 
     #                 logger.info(f"Performing optimizer reset at step {self.state.global_step}")
     #                 self._reset_optimizer()
                     
-    #             # 检查是否所有模块都已收敛
     #             if isinstance(model, torch.nn.parallel.DistributedDataParallel):
     #                 all_converged = model.module.check_all_converged()
     #             else:
@@ -442,7 +432,6 @@ class ReLoRATrainer(Trainer):
     #                 if self.convergence_counter >= self.convergence_patience:
     #                     logger.info("Training stopped due to convergence")
     #                     self.all_converged = True
-    #                     # 只在主进程保存模型
     #                     if self.is_world_process_zero():
     #                         self._save_checkpoint(model, trial=None)
     #                         logger.info("Final checkpoint saved before early stopping")
@@ -450,13 +439,12 @@ class ReLoRATrainer(Trainer):
     #             else:
     #                 self.convergence_counter = 0
         
-    #     # 优化器重置检查
     #     # if (self.state.global_step > 0 and 
-    #     #     self.relora_args.cycle_length is not None and  
-    #     #     self.state.global_step % self.relora_args.cycle_length == 0): # 这样写不行 虽然到relora步才check但是第一次check的weight_change全为0 不知为啥
-    #     # if (self.relora_args.relora is not None and
+    #     #     self.AROMA_args.cycle_length is not None and  
+    #     #     self.state.global_step % self.AROMA_args.cycle_length == 0): # 这样写不行 虽然到T_in步才check但是第一次check的weight_change全为0 不知为啥
+    #     # if (self.AROMA_args.T_in is not None and
     #     #     self.update_step % self.args.gradient_accumulation_steps == 0 and
-    #     #     self.update_step / self.args.gradient_accumulation_steps % self.relora_args.relora == 0):
+    #     #     self.update_step / self.args.gradient_accumulation_steps % self.AROMA_args.T_in == 0):
     #     # if (self.update_step % self.args.gradient_accumulation_steps == 0 and need_reset):
     #     #     logger.info(f"Performing optimizer reset at step {self.state.global_step}")
     #     #     logger.info(f"Performing optimizer reset at update_step {self.update_step}")
@@ -465,10 +453,8 @@ class ReLoRATrainer(Trainer):
     #     return loss
 
     def training_step(self, model, inputs, num_items_in_batch=None):
-        """重写training_step方法"""
         self.update_step += 1
 
-        # 正常训练步骤
         if not isinstance(inputs, dict):
             inputs = dict(inputs)
             
@@ -477,9 +463,9 @@ class ReLoRATrainer(Trainer):
 
         loss = super().training_step(model, inputs, num_items_in_batch)
         
-        if (self.relora_args.relora is not None and
+        if (self.AROMA_args.T_in is not None and
             self.update_step % self.args.gradient_accumulation_steps == 0 and
-            self.update_step / self.args.gradient_accumulation_steps % self.relora_args.relora == 0):
+            self.update_step / self.args.gradient_accumulation_steps % self.AROMA_args.T_in == 0):
             
             if self.is_world_process_zero():
                 logger.info(f"Performing lora reset at global_step {self.state.global_step}")
@@ -515,9 +501,9 @@ class ReLoRATrainer(Trainer):
             else:
                 self.convergence_counter = 0
         
-        if (self.relora_args.relora is not None and
+        if (self.AROMA_args.T_in is not None and
             self.update_step % self.args.gradient_accumulation_steps == 0 and
-            self.update_step / self.args.gradient_accumulation_steps % self.relora_args.relora == 0):
+            self.update_step / self.args.gradient_accumulation_steps % self.AROMA_args.T_in == 0):
             logger.info(f"Performing optimizer reset at step {self.state.global_step}")
             logger.info(f"Performing optimizer reset at update_step {self.update_step}")
             self._reset_optimizer()
@@ -577,9 +563,9 @@ class ReLoRATrainer(Trainer):
             self.optimizer,
             reset_params=[p for n, p in self.model.named_parameters() if "lora_" in n],
             optimizer_state_keys=["exp_avg", "exp_avg_sq"], # Adam优化器的state_keys
-            reset_optimizer_on_relora=self.relora_args.reset_optimizer_on_relora,
-            optimizer_random_pruning=self.relora_args.optimizer_random_pruning,
-            optimizer_magnitude_pruning=self.relora_args.optimizer_magnitude_pruning,
+            reset_optimizer_on_relora=self.AROMA_args.reset_optimizer_on_relora,
+            optimizer_random_pruning=self.AROMA_args.optimizer_random_pruning,
+            optimizer_magnitude_pruning=self.AROMA_args.optimizer_magnitude_pruning,
         )
 
 class TrainerStopException(Exception):
@@ -753,7 +739,7 @@ def send_email(subject, content):
     if not send_email.is_main_process:
         return
 
-    receiver = "hnsheng2-c@my.cityu.edu.hk"
+    receiver = "your email address"
     try:
         cmd = f'echo "{content}" | mail -s "{subject}" {receiver}'
         os.system(cmd)
@@ -768,11 +754,11 @@ def main():
     # or by passing the --help flag to this script.
     # We now keep distinct sets of args, for a cleaner separation of concerns.
 
-    parser = HfArgumentParser((ModelArguments, DataTrainingArguments, TrainingArguments, ReLoRAArguments)) 
+    parser = HfArgumentParser((ModelArguments, DataTrainingArguments, TrainingArguments, AROMAArguments)) 
     if len(sys.argv) == 2 and sys.argv[1].endswith(".json"):
-        model_args, data_args, training_args, relora_args = parser.parse_json_file(json_file=os.path.abspath(sys.argv[1]))
+        model_args, data_args, training_args, AROMA_args = parser.parse_json_file(json_file=os.path.abspath(sys.argv[1]))
     else:
-        model_args, data_args, training_args, relora_args = parser.parse_args_into_dataclasses()
+        model_args, data_args, training_args, AROMA_args = parser.parse_args_into_dataclasses()
 
     send_email(
         "Training started",
@@ -781,8 +767,8 @@ def main():
         f"Training parameters:\n"
         f"- learning rate: {training_args.learning_rate}\n"
         f"- batch size: {training_args.per_device_train_batch_size}\n"
-        f"- ReLoRA step: {relora_args.relora}\n"
-        f"- LoRA rank: {relora_args.lora_r}"
+        f"- T_in: {AROMA_args.T_in}\n"
+        f"- LoRA rank: {AROMA_args.lora_r}"
     )
 
     # Setup logging
@@ -818,17 +804,17 @@ def main():
 
     training_args.include_inputs_for_metrics = True
 
-    def get_gpu_memory_info():
-        gpus = GPUtil.getGPUs()
-        memory_info = []
-        for gpu in gpus:
-            memory_info.append({
-                'id': gpu.id,
-                'memory_used': gpu.memoryUsed,  # MB
-                'memory_total': gpu.memoryTotal,  # MB
-                'memory_util': gpu.memoryUtil * 100  # %
-            })
-        return memory_info
+    # def get_gpu_memory_info():
+    #     gpus = GPUtil.getGPUs()
+    #     memory_info = []
+    #     for gpu in gpus:
+    #         memory_info.append({
+    #             'id': gpu.id,
+    #             'memory_used': gpu.memoryUsed,  # MB
+    #             'memory_total': gpu.memoryTotal,  # MB
+    #             'memory_util': gpu.memoryUtil * 100  # %
+    #         })
+    #     return memory_info
 
     # Log on each process the small summary:
     logger.warning(
@@ -914,25 +900,25 @@ def main():
         else:
             raise RuntimeError("No CUDA device available")
 
-    if relora_args.relora is not None:
+    if AROMA_args.T_in is not None:
         need_linear_weight = True
-        logger.info(f"Wrapping model with ReLoRA ({need_linear_weight=})")
+        logger.info(f"Wrapping model with AROMA ({need_linear_weight=})")
         
-        model = ReLoRaModel(
+        model = AROMAModel(
             model,
-            r=relora_args.lora_r,
-            lora_alpha=relora_args.lora_alpha,
+            r=AROMA_args.lora_r,
+            lora_alpha=AROMA_args.lora_alpha,
             target_modules=["q_proj", "v_proj", "k_proj", "down_proj", "up_proj"],
             lora_dropout=0.1,
-            trainable_scaling=relora_args.train_scaling,
+            trainable_scaling=AROMA_args.train_scaling,
             keep_original_weights=True,
             lora_only=not need_linear_weight,
-            convergence_threshold=relora_args.convergence_threshold,
-            check_convergence=relora_args.check_convergence,
-            convergence_window=relora_args.convergence_window,
-            lora_check_frequency=relora_args.lora_check_frequency,
-            max_steps_before_reset=relora_args.max_steps_before_reset,
-            lora_change_threshold=relora_args.lora_change_threshold,
+            convergence_threshold=AROMA_args.convergence_threshold,
+            check_convergence=AROMA_args.check_convergence,
+            convergence_window=AROMA_args.convergence_window,
+            lora_check_frequency=AROMA_args.lora_check_frequency,
+            max_steps_before_reset=AROMA_args.max_steps_before_reset,
+            lora_change_threshold=AROMA_args.lora_change_threshold,
         )
     
     params_after = sum(p.numel() for p in model.parameters())
@@ -974,7 +960,7 @@ def main():
             path = Path(data_args.dataset_dir)
             files = [os.path.join(path,file.name) for file in path.glob("*.json")]
 
-            logger.info("\n=== 原始数据样本 ===")
+            logger.info("\n=== Raw data samples ===")
             raw_dataset = load_dataset("json", data_files=files)
             logger.info(raw_dataset['train'][0])
 
@@ -985,32 +971,32 @@ def main():
                 val_set_size=data_args.val_set_size,
                 )
 
-            logger.info("\n=== 预处理后的样本 ===")
-            logger.info("\n1. 生成的prompt:")
-            from peft_pretraining.commonsense_dataset import generate_prompt
-            logger.info(generate_prompt(raw_dataset['train'][0]))
+            # logger.info("\n=== Preprocessed samples ===")
+            # logger.info("\n1. Generated prompt:")
+            # from peft_pretraining.commonsense_dataset import generate_prompt
+            # logger.info(generate_prompt(raw_dataset['train'][0]))
             
-            logger.info("\n2. Tokenize后的结果:")
-            logger.info(f"Input ids: {train_dataset[0]['input_ids'][:256]}...")
-            logger.info(f"Labels: {train_dataset[0]['labels'][:256]}...")
+            # logger.info("\n2. Tokenized results:")
+            # logger.info(f"Input ids: {train_dataset[0]['input_ids'][:256]}...")
+            # logger.info(f"Labels: {train_dataset[0]['labels'][:256]}...")
             
-            logger.info("\n3. 解码后的内容:")
-            decoded_input = tokenizer.decode(train_dataset[0]['input_ids'])
-            logger.info(f"Decoded input:\n{decoded_input}")
+            # logger.info("\n3. Decoded content:")
+            # decoded_input = tokenizer.decode(train_dataset[0]['input_ids'])
+            # logger.info(f"Decoded input:\n{decoded_input}")
             
-            logger.info("\n4. 统计信息:")
-            logger.info(f"输入长度: {len(train_dataset[0]['input_ids'])}")
-            logger.info(f"标签长度: {len(train_dataset[0]['labels'])}")
-            logger.info(f"最大长度设置: {data_args.max_seq_length}")
-            logger.info("="*50)
+            # logger.info("\n4. Statistics:")
+            # logger.info(f"Input length: {len(train_dataset[0]['input_ids'])}")
+            # logger.info(f"Label length: {len(train_dataset[0]['labels'])}")
+            # logger.info(f"Maximum length setting: {data_args.max_seq_length}")
+            # logger.info("="*50)
             
-            logger.info(f"\nNum train_samples: {len(train_dataset)}")
-            if eval_dataset:
-                logger.info(f"Num val_samples: {len(eval_dataset)}")
+            # logger.info(f"\nNum train_samples: {len(train_dataset)}")
+            # if eval_dataset:
+            #     logger.info(f"Num val_samples: {len(eval_dataset)}")
 
     # Initialize our Trainer
-    trainer = ReLoRATrainer(
-        relora_args=relora_args,
+    trainer = AROMATrainer(
+        AROMA_args=AROMA_args,
         # task_name=data_args.task_name,
         model=model,
         args=training_args,
@@ -1038,42 +1024,42 @@ def main():
         elif last_checkpoint is not None:
             checkpoint = last_checkpoint
 
-        train_start_time = time.time()
+        # train_start_time = time.time()
         
-        initial_gpu_info = get_gpu_memory_info()
-        logger.info(f"Initial GPU Memory Usage: {initial_gpu_info}")
+        # initial_gpu_info = get_gpu_memory_info()
+        # logger.info(f"Initial GPU Memory Usage: {initial_gpu_info}")
 
-        class TimeCallback(transformers.TrainerCallback):
-            def __init__(self):
-                self.epoch_start_time = None
-                self.epoch_times = []
+        # class TimeCallback(transformers.TrainerCallback):
+        #     def __init__(self):
+        #         self.epoch_start_time = None
+        #         self.epoch_times = []
 
-            def on_epoch_begin(self, args, state, control, **kwargs):
-                if args.local_rank in [-1, 0]:
-                    self.epoch_start_time = time.time()
-                    gpu_info = get_gpu_memory_info()
-                    logger.info(f"Epoch {state.epoch} GPU Memory Usage: {gpu_info}")
+        #     def on_epoch_begin(self, args, state, control, **kwargs):
+        #         if args.local_rank in [-1, 0]:
+        #             self.epoch_start_time = time.time()
+        #             gpu_info = get_gpu_memory_info()
+        #             logger.info(f"Epoch {state.epoch} GPU Memory Usage: {gpu_info}")
 
-            def on_epoch_end(self, args, state, control, **kwargs):
-                if args.local_rank in [-1, 0]:
-                    epoch_time = time.time() - self.epoch_start_time
-                    self.epoch_times.append(epoch_time)
-                    gpu_info = get_gpu_memory_info()
-                    logger.info(f"Epoch {state.epoch} completed in {epoch_time:.2f} seconds")
-                    logger.info(f"Epoch {state.epoch} GPU Memory Usage: {gpu_info}")
+        #     def on_epoch_end(self, args, state, control, **kwargs):
+        #         if args.local_rank in [-1, 0]:
+        #             epoch_time = time.time() - self.epoch_start_time
+        #             self.epoch_times.append(epoch_time)
+        #             gpu_info = get_gpu_memory_info()
+        #             logger.info(f"Epoch {state.epoch} completed in {epoch_time:.2f} seconds")
+        #             logger.info(f"Epoch {state.epoch} GPU Memory Usage: {gpu_info}")
 
-        time_callback = TimeCallback()
-        trainer.add_callback(time_callback)
+        # time_callback = TimeCallback()
+        # trainer.add_callback(time_callback)
 
         train_result = trainer.train(resume_from_checkpoint=checkpoint) # Train!
         metrics = train_result.metrics
 
-        total_train_time = time.time() - train_start_time
-        logger.info(f"Total training time: {total_train_time:.2f} seconds")
-        logger.info(f"Average time per epoch: {sum(time_callback.epoch_times)/len(time_callback.epoch_times):.2f} seconds")
+        # total_train_time = time.time() - train_start_time
+        # logger.info(f"Total training time: {total_train_time:.2f} seconds")
+        # logger.info(f"Average time per epoch: {sum(time_callback.epoch_times)/len(time_callback.epoch_times):.2f} seconds")
         
-        final_gpu_info = get_gpu_memory_info()
-        logger.info(f"Final GPU Memory Usage: {final_gpu_info}")
+        # final_gpu_info = get_gpu_memory_info()
+        # logger.info(f"Final GPU Memory Usage: {final_gpu_info}")
 
         max_train_samples = (
             data_args.max_train_samples if data_args.max_train_samples is not None else len(train_dataset)
@@ -1108,104 +1094,18 @@ def main():
         trainer.log_metrics("eval", metrics)
         trainer.save_metrics("eval", metrics)
 
-    # # Prediction!
-    # if training_args.do_predict:
-    #     logger.info("*** Predict! ***")
-    #     logger.info(f"Model num_labels: {model.config.num_labels}")
-    #     logger.info(f"Task name: {data_args.task_name}")
-    #     logger.info(f"Total examples in predict dataset: {len(predict_dataset)}")
-        
-    #     # 1. 移除test集的labels列
-    #     if data_args.task_name != "mrpc" and 'labels' in predict_dataset.features:
-    #         logger.info("Removing labels for test set as they are placeholder values (-1)")
-    #         predict_dataset = predict_dataset.remove_columns(['labels'])
-        
-    #     # 2. 检查数据集
-    #     logger.info(f"Dataset features: {predict_dataset.features}")
-        
-    #     # Loop to handle MNLI double evaluation (matched, mis-matched)
-    #     tasks = [data_args.task_name]
-    #     predict_datasets = [predict_dataset]
-    #     if data_args.task_name == "mnli":
-    #         tasks.append("mnli-mm")
-    #         predict_datasets.append(raw_datasets["test_mismatched"])
-
-    #     for predict_dataset, task in zip(predict_datasets, tasks):
-    #         # 预测
-    #         predict_output = trainer.predict(predict_dataset, metric_key_prefix="predict")
-    #         predictions = predict_output.predictions
-            
-    #         # 只在主进程处理预测结果
-    #         if training_args.local_rank in [-1, 0]:
-    #             # 如果是元组，取第一个元素（通常是logits）
-    #             if isinstance(predictions, tuple):
-    #                 predictions = predictions[0]
-                
-    #             # 确保predictions是numpy数组
-    #             predictions = np.array(predictions)
-                
-    #             # 对于分类任务，获取最终预测类别
-    #             if not is_regression:
-    #                 predictions = np.argmax(predictions, axis=1)
-                
-    #             # 记录预测结果信息
-    #             logger.info(f"\n=== Prediction Results for {task} ===")
-    #             logger.info(f"Predictions shape: {predictions.shape}")
-    #             logger.info(f"Sample predictions: {predictions[:10]}")
-    #             logger.info(f"Prediction distribution: {np.unique(predictions, return_counts=True)}")
-
-    #             # 保存预测结果
-    #             output_predict_file = os.path.join(training_args.output_dir, f"predict_results_{task}.txt")
-    #             with open(output_predict_file, "w") as writer:
-    #                 logger.info(f"***** Predict results {task} *****")
-    #                 writer.write("index\tprediction\n")
-    #                 for index, item in enumerate(predictions):
-    #                     if is_regression:
-    #                         writer.write(f"{index}\t{item:3.3f}\n")
-    #                     else:
-    #                         item = label_list[int(item)]
-    #                         writer.write(f"{index}\t{item}\n")
-                
-    #             logger.info(f"Predictions saved to {output_predict_file}")
-                
-    #             # 记录样本数量
-    #             metrics = {}
-    #             max_predict_samples = (
-    #                 data_args.max_predict_samples if data_args.max_predict_samples is not None 
-    #                 else len(predict_dataset)
-    #             )
-    #             metrics["predict_samples"] = min(max_predict_samples, len(predict_dataset))
-                
-    #             # 保存指标
-    #             trainer.log_metrics("predict", metrics)
-    #             trainer.save_metrics("predict", metrics)
-
-    #     logger.info("Prediction completed!")
-
-    # kwargs = {"finetuned_from": model_args.model_name_or_path, "tasks": "text-classification"}
-    # if data_args.task_name is not None:
-    #     kwargs["language"] = "en"
-    #     kwargs["dataset_tags"] = "glue"
-    #     kwargs["dataset_args"] = data_args.task_name
-    #     kwargs["dataset"] = f"GLUE {data_args.task_name.upper()}"
-
-    # if training_args.push_to_hub:
-    #     trainer.push_to_hub(**kwargs)
-    # else:
-    #     trainer.create_model_card(**kwargs)
-
-    logger.info("*** ReLoRA Training Finished! ***")
+    logger.info("*** AROMA Training Finished! ***")
 
     end_time = datetime.now()
     duration = end_time - datetime.strptime(start_time, "%Y-%m-%d %H:%M:%S")
 
     send_email(
-        "训练任务完成通知",
-        f"训练任务已成功完成！\n"
-        f"开始时间: {start_time}\n"
-        f"结束时间: {end_time.strftime('%Y-%m-%d %H:%M:%S')}\n"
-        f"运行时长: {duration}\n"
-        f"输出目录: {training_args.output_dir}\n"
+        "Training finished",
+        f"Training task has finished running\n"
+        f"Start time: {start_time}\n"
+        f"End time: {end_time.strftime('%Y-%m-%d %H:%M:%S')}\n"
+        f"Running time: {duration}\n"
+        f"Output directory: {training_args.output_dir}\n"
     )
 
 

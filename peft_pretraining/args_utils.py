@@ -36,7 +36,7 @@ def check_args_torchrun_main(args):
 
     if not args.use_peft:
         # just for more clear hparam logging to wandb
-        args.relora = None
+        args.T_in = None
         args.lora_r = None
         args.force_keep_original = False
 
@@ -62,8 +62,8 @@ def check_args_torchrun_main(args):
         ) > 1:
         raise ValueError("reset_optimizer_on_relora, and keep_first_opt_rows are mutually exclusive")
 
-    if args.relora and not args.use_peft:
-        logger.warning("--relora assumes --use_peft. Setting --use_peft=True")
+    if args.T_in and not args.use_peft:
+        logger.warning("--T_in assumes --use_peft. Setting --use_peft=True")
         args.use_peft = True
 
     assert 0 <= args.optimizer_random_pruning < 1, "--optimizer_random_pruning must be between 0 and 1"

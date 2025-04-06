@@ -4,9 +4,9 @@ NPROC_PER_NODE=1
 
 RANDOM_PORT=$(shuf -i 20000-65000 -n 1)
 
-MODEL_NAME_OR_PATH="path to roberta-base"
+MODEL_NAME_OR_PATH="path/to/your/roberta-base"
 TASK_NAME="mnli"
-OUTPUT_DIR="./experiments/glue/"
+OUTPUT_DIR="path/to/your/experiments/glue/"
 NUM_TRAIN_EPOCHS=20
 NUM_TRAINING_STEPS=490000
 MAX_SEQ_LENGTH=256
@@ -15,7 +15,7 @@ PER_DEVICE_EVAL_BATCH_SIZE=32
 GRADIENT_ACCUMULATION_STEPS=1
 LORA_R=1
 LORA_ALPHA=4
-RELORA=5000
+T_IN=5000
 CYCLE_LENGTH=5000
 SAVE_STEPS=5000
 SCHEDULER_TYPE="cosine_restarts"
@@ -60,7 +60,7 @@ torchrun --nproc_per_node=$NPROC_PER_NODE \
     --learning_rate $lr \
     --lora_r $LORA_R \
     --lora_alpha $LORA_ALPHA \
-    --relora $RELORA \
+    --T_in $T_IN \
     --cycle_length $CYCLE_LENGTH \
     --save_steps $SAVE_STEPS \
     --scheduler_type $SCHEDULER_TYPE \
