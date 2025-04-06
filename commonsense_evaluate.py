@@ -30,7 +30,7 @@ def parse_args():
     parser.add_argument('--dataset', choices=["boolq", "piqa", "social_i_qa", "hellaswag", "winogrande", "ARC-Challenge", "ARC-Easy", "openbookqa"],
                         required=True)
     parser.add_argument('--model', choices=['LLaMA-7B', "LLaMA-13B",'BLOOM-7B', 'GPT-j-6B', 'LLaMA3'], required=True)
-    parser.add_argument('--adapter', choices=['LoRA', 'AdaLoRA', 'AR1LoRA', 'AdapterP', 'AdapterH', 'Parallel'],
+    parser.add_argument('--adapter', choices=['LoRA', 'AdaLoRA', 'AROMA', 'AdapterP', 'AdapterH', 'Parallel'],
                         required=True)
     parser.add_argument('--base_model', required=True)
     parser.add_argument('--lora_weights', required=True)
@@ -68,7 +68,7 @@ def generate_prompt(instruction, input=None):
 
 
 def load_data(args) -> list:
-    file_path = f'/home/hnsheng2/scratch/R1LoRA-FT-backup/CommonsenseEvalDataset/{args.dataset}/test.json'
+    file_path = f'/path/to/your/CommonsenseEvalDataset/{args.dataset}/test.json'
     if not os.path.exists(file_path):
         raise FileNotFoundError(f"can not find dataset file : {file_path}")
     json_data = json.load(open(file_path, 'r'))
@@ -112,7 +112,7 @@ def load_model(args) -> tuple:
 
     
     if device == "cuda":
-        if args.adapter != "AR1LoRA":
+        if args.adapter != "AROMA":
             model = AutoModelForCausalLM.from_pretrained(
                 base_model,
                 load_in_8bit=load_8bit,
@@ -134,7 +134,7 @@ def load_model(args) -> tuple:
                 torch_dtype=torch.float16,
             )
     elif device == "mps":
-        if args.adapter != "AR1LoRA":   
+        if args.adapter != "AROMA":   
             model = AutoModelForCausalLM.from_pretrained(
                 base_model,
                 device_map={"": device},
@@ -154,7 +154,7 @@ def load_model(args) -> tuple:
                 torch_dtype=torch.float16
             )
     else:
-        if args.adapter != "AR1LoRA":
+        if args.adapter != "AROMA":
             model = AutoModelForCausalLM.from_pretrained(
                 base_model, device_map={"": device}, low_cpu_mem_usage=True
             )
